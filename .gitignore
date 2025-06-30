@@ -1,0 +1,4 @@
+terraform/.terraform*
+terraform/terraform.tfstate*
+terraform/user_data.sh
+*.pem
