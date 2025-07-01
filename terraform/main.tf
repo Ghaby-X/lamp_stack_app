@@ -71,18 +71,105 @@ systemctl enable httpd
 
 cat > /var/www/html/index.php << 'EOL'
 <?php
-$app_server = "${module.app_instance.private_ip}:3000";
+$app_server = "${module.app_instance.private_ip}";
 
-// Get current count from app tier
-$count = file_get_contents("http://$app_server/count");
+// Get count from app tier
+$response = file_get_contents("http://$app_server/api.php");
+$data = json_decode($response, true);
+$count = $data['count'] ?? 'N/A';
 ?>
 <!DOCTYPE html>
-<html>
-<head><title>Page Visit Counter</title></head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3-Tier Page Counter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            padding: 3rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 1rem;
+            font-size: 2.5rem;
+        }
+        .counter {
+            background: #f8f9fa;
+            padding: 2rem;
+            border-radius: 15px;
+            margin: 2rem 0;
+            border-left: 5px solid #667eea;
+        }
+        .count-number {
+            font-size: 3rem;
+            font-weight: bold;
+            color: #667eea;
+            margin: 0.5rem 0;
+        }
+        .count-label {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        .refresh-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            text-decoration: none;
+            display: inline-block;
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+        }
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        .architecture {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: #f1f3f4;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+    </style>
+</head>
 <body>
-    <h1>Page Visit Counter</h1>
-    <h2>This page has been visited <?= $count ?> times</h2>
-    <p><a href="/">Refresh to increment counter</a></p>
+    <div class="container">
+        <h1>🌐 3-Tier Counter</h1>
+        
+        <div class="counter">
+            <div class="count-label">Total Page Visits</div>
+            <div class="count-number"><?= htmlspecialchars($count) ?></div>
+        </div>
+        
+        <a href="/" class="refresh-btn">🔄 Increment Counter</a>
+        
+        <div class="architecture">
+            <strong>Architecture:</strong> Web Tier → App Tier → Database Tier
+        </div>
+    </div>
 </body>
 </html>
 EOL
@@ -118,27 +205,42 @@ systemctl enable httpd
 # Create the API endpoint
 cat > /var/www/html/api.php << 'EOL'
 <?php
-header('Content-Type: text/plain');
-
+// Database credentials
 $host = "${module.db_instance.private_ip}";
-$user = "admin";
-$password = "password123";
-$database = "appdb";
+$db = 'appdb';
+$user = 'root';
+$pass = 'password123';
 
-try {
-    $pdo = new PDO("mysql:host=$host;dbname=$database", $user, $password);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+// Connect to MySQL
+$conn = new mysqli($host, $user, $pass, $db);
 
-    // Increment counter
-    $pdo->exec("UPDATE counters SET count = count + 1 WHERE id = 1");
-
-    // Fetch updated count
-    $stmt = $pdo->query("SELECT count FROM counters WHERE id = 1");
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    echo $row['count'];
-} catch (PDOException $e) {
-    echo "0";
+// Check connection
+if ($conn->connect_error) {
+    http_response_code(500);
+    echo json_encode(['error' => 'Database connection failed']);
+    exit();
 }
+
+header('Content-Type: application/json');
+
+// Increment count
+// Increment the count
+$update = "UPDATE counters SET count = count + 1 WHERE id = 1";
+if ($conn->query($update)) {
+    // Fetch updated count
+    $result = $conn->query("SELECT count FROM counters WHERE id = 1");
+    if ($row = $result->fetch_assoc()) {
+        echo json_encode(['count' => (int)$row['count']]);
+    } else {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to fetch count']);
+    }
+} else {
+    http_response_code(500);
+    echo json_encode(['error' => 'Failed to increment count']);
+}
+
+$conn->close();
 ?>
 EOL
 EOF
@@ -166,23 +268,44 @@ module "db_instance" {
 
   user_data = <<EOF
 #!/bin/bash
-yum update -y
-yum install -y mysql-server
-systemctl start mysqld
-systemctl enable mysqld
+set -e
 
-mysql -e "CREATE DATABASE appdb;"
-mysql -e "CREATE USER 'admin'@'%' IDENTIFIED BY 'password123';"
-mysql -e "GRANT ALL PRIVILEGES ON appdb.* TO 'admin'@'%';"
-mysql -e "FLUSH PRIVILEGES;"
+# Update system and install Docker
+dnf update -y
+dnf install -y docker
+systemctl start docker
+systemctl enable docker
 
-mysql -e "USE appdb; CREATE TABLE counters (
+# Add ec2-user to docker group (optional, for easier docker use)
+usermod -aG docker ec2-user
+
+# Create docker volume for MySQL data
+docker volume create mysql_data
+
+# Run MySQL container with volume and env vars
+docker run -d \
+  --name mysql-server \
+  -e MYSQL_ROOT_PASSWORD=password123 \
+  -e MYSQL_DATABASE=appdb \
+  -p 3306:3306 \
+  -v mysql_data:/var/lib/mysql \
+  --restart unless-stopped \
+  mysql:8
+
+# Wait for MySQL to initialize
+echo "Waiting 30 seconds for MySQL to initialize..."
+sleep 30
+
+# Create table and insert initial row inside container
+docker exec -i mysql-server mysql -u root -ppassword123 <<EOF
+USE appdb;
+CREATE TABLE IF NOT EXISTS counters (
   id INT PRIMARY KEY,
   count INT DEFAULT 0
-);"
-
-mysql -e "USE appdb; INSERT INTO counters (id, count) VALUES (1, 0);"
+);
+INSERT INTO counters (id, count) VALUES (1, 0) ON DUPLICATE KEY UPDATE count=count;
 EOF
+
 
   tags = {
     Terraform   = "true"
@@ -228,8 +351,8 @@ module "app_security_group" {
 
   ingress_with_source_security_group_id = [
     {
-      from_port                = 3000
-      to_port                  = 3000
+      from_port                = 80
+      to_port                  = 80
       protocol                 = "tcp"
       description              = "App access from web tier"
       source_security_group_id = module.web_security_group.security_group_id
