@@ -2,6 +2,8 @@
 
 A modern 3-tier web application deployed on AWS using Terraform, featuring a page visit counter with a beautiful UI.
 
+LIVE LINK: http://3.252.149.109/
+
 ## Architecture
 
 ![alt text](architecture.png)
