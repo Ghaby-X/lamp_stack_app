@@ -207,9 +207,9 @@ cat > /var/www/html/api.php << 'EOL'
 <?php
 // Database credentials
 $host = "${module.db_instance.private_ip}";
-$db = 'appdb';
+$db = "${var.database_name}";
 $user = 'root';
-$pass = 'password123';
+$pass = "${var.database_password}";
 
 // Connect to MySQL
 $conn = new mysqli($host, $user, $pass, $db);
@@ -285,8 +285,8 @@ docker volume create mysql_data
 # Run MySQL container with volume and env vars
 docker run -d \
   --name mysql-server \
-  -e MYSQL_ROOT_PASSWORD=password123 \
-  -e MYSQL_DATABASE=appdb \
+  -e MYSQL_ROOT_PASSWORD=${var.database_password} \
+  -e MYSQL_DATABASE=${var.database_name} \
   -p 3306:3306 \
   -v mysql_data:/var/lib/mysql \
   --restart unless-stopped \
@@ -297,7 +297,7 @@ echo "Waiting 30 seconds for MySQL to initialize..."
 sleep 30
 
 # Create table and insert initial row inside container
-docker exec -i mysql-server mysql -u root -ppassword123 <<EOF
+docker exec -i mysql-server mysql -u root -p${var.database_password} <<EOF
 USE appdb;
 CREATE TABLE IF NOT EXISTS counters (
   id INT PRIMARY KEY,
